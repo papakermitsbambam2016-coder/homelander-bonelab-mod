@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
@@ -13,12 +14,15 @@ internal sealed class HomelanderAI
     private GameObject? npc;
     private float attackCooldown;
     private float tauntCooldown;
-    private float flightHeight = 0f;
+    private float flightHeight;
     private bool heatVisionActive;
 
     public bool IsAlive { get; private set; } = true;
 
-    public HomelanderAI(HeatVisionSystem heatVision, VoiceSystem voice, AnimationController animation)
+    public HomelanderAI(
+        HeatVisionSystem heatVision,
+        VoiceSystem voice,
+        AnimationController animation)
     {
         this.heatVision = heatVision;
         this.voice = voice;
@@ -28,6 +32,7 @@ internal sealed class HomelanderAI
     public void Attach(GameObject go)
     {
         npc = go;
+
         IsAlive = true;
         attackCooldown = 0f;
         tauntCooldown = 0f;
@@ -38,47 +43,89 @@ internal sealed class HomelanderAI
         heatVision.Ensure(go);
 
         animation.Play("Idle");
+
         voice.Play("intro", go.transform.position);
     }
 
     public void Update()
     {
-        if (npc == null || !IsAlive || !ModConfig.EnableAI.Value)
+        if (npc == null)
             return;
 
-        var camera = Camera.main;
+        if (!IsAlive)
+            return;
+
+        if (!ModConfig.EnableAI.Value)
+            return;
+
+        Camera? camera = Camera.main;
+
         if (camera == null)
             return;
 
-        var target = camera.transform;
-        float dt = Time.deltaTime;
+        Transform target = camera.transform;
 
-        attackCooldown -= dt;
-        tauntCooldown -= dt;
+        float deltaTime = Time.deltaTime;
 
-        Vector3 npcPos = npc.transform.position;
-        Vector3 targetPos = target.position;
+        attackCooldown -= deltaTime;
+        tauntCooldown -= deltaTime;
 
-        float distance = Vector3.Distance(npcPos, targetPos);
+        Vector3 npcPosition = npc.transform.position;
+        Vector3 targetPosition = target.position;
 
-        if (ModConfig.EnableFlight.Value && flightHeight > 0f)
+        float distance =
+            Vector3.Distance(
+                npcPosition,
+                targetPosition);
+
+        if (ModConfig.EnableFlight.Value &&
+            flightHeight > 0f)
         {
-            Vector3 desired = targetPos + Vector3.up * flightHeight - target.forward * 4f;
-            npc.transform.position = Vector3.Lerp(npc.transform.position, desired, dt * 1.5f);
+            Vector3 desired =
+                targetPosition +
+                Vector3.up * flightHeight -
+                target.forward * 4f;
+
+            npc.transform.position =
+                Vector3.Lerp(
+                    npc.transform.position,
+                    desired,
+                    deltaTime * 1.5f);
+
             animation.Play("Fly");
         }
-        else if (distance > ModConfig.FollowDistance.Value)
+        else if (distance >
+                 ModConfig.FollowDistance.Value)
         {
-            Vector3 flatTarget = new Vector3(targetPos.x, npcPos.y, targetPos.z);
-            Vector3 direction = flatTarget - npcPos;
+            Vector3 flatTarget =
+                new Vector3(
+                    targetPosition.x,
+                    npcPosition.y,
+                    targetPosition.z);
+
+            Vector3 direction =
+                flatTarget -
+                npcPosition;
 
             if (direction.sqrMagnitude > 0.001f)
             {
                 direction.Normalize();
-                npc.transform.position += direction * ModConfig.MoveSpeed.Value * dt;
 
-                var look = Quaternion.LookRotation(direction, Vector3.up);
-                npc.transform.rotation = Quaternion.Slerp(npc.transform.rotation, look, dt * 8f);
+                npc.transform.position +=
+                    direction *
+                    ModConfig.MoveSpeed.Value *
+                    deltaTime;
+
+                Quaternion look =
+                    Quaternion.LookRotation(
+                        direction,
+                        Vector3.up);
+
+                npc.transform.rotation =
+                    Quaternion.Slerp(
+                        npc.transform.rotation,
+                        look,
+                        deltaTime * 8f);
             }
 
             animation.Play("Walk");
@@ -88,16 +135,26 @@ internal sealed class HomelanderAI
             animation.Play("Idle");
         }
 
-        if (distance <= ModConfig.AttackDistance.Value && attackCooldown <= 0f)
-            Attack(target);
-
-        if (distance < 12f && tauntCooldown <= 0f)
+        if (distance <= ModConfig.AttackDistance.Value &&
+            attackCooldown <= 0f)
         {
-            voice.Play("taunt", npc.transform.position);
+            Attack(target);
+        }
+
+        if (distance < 12f &&
+            tauntCooldown <= 0f)
+        {
+            voice.Play(
+                "taunt",
+                npc.transform.position);
+
             tauntCooldown = 12f;
         }
 
-        heatVision.Update(npc.transform, target, heatVisionActive);
+        heatVision.Update(
+            npc.transform,
+            target,
+            heatVisionActive);
     }
 
     public void Attack(Transform target)
@@ -105,53 +162,174 @@ internal sealed class HomelanderAI
         if (npc == null)
             return;
 
-        attackCooldown = 2.0f;
-        animation.Play("Attack");
-        voice.Play("attack", npc.transform.position);
+        attackCooldown = 2f;
 
-        // A safe visual/gameplay test: apply a forward impulse to nearby rigidbodies.
-        // This does not directly depend on BONELAB's internal damage classes.
+        animation.Play("Attack");
+
+        voice.Play(
+            "attack",
+            npc.transform.position);
+
+        /*
+         * We intentionally don't reference Rigidbody or ForceMode here.
+         *
+         * Those are Unity PhysicsModule types and aren't currently
+         * available to the GitHub compiler.
+         *
+         * Instead, we find Rigidbody at runtime using reflection.
+         */
+
         try
         {
-            Vector3 origin = npc.transform.position + Vector3.up * 1.2f;
-            Vector3 dir = (target.position - origin).normalized;
+            Type? rigidbodyType =
+                FindUnityType(
+                    "UnityEngine.Rigidbody");
 
-            foreach (var body in UnityEngine.Object.FindObjectsOfType<Rigidbody>())
+            if (rigidbodyType == null)
             {
-                if (body == null) continue;
+                MelonLogger.Warning(
+                    "Rigidbody type was not available.");
+                return;
+            }
 
-                float d = Vector3.Distance(body.position, npc.transform.position);
-                if (d > 3.0f) continue;
+            Vector3 origin =
+                npc.transform.position +
+                Vector3.up * 1.2f;
 
-                body.AddForce((dir + Vector3.up * 0.35f) * 12f, ForceMode.Impulse);
+            Vector3 direction =
+                (target.position - origin).normalized;
+
+            UnityEngine.Object[] objects =
+                UnityEngine.Object.FindObjectsOfType(
+                    rigidbodyType);
+
+            foreach (UnityEngine.Object obj in objects)
+            {
+                if (obj == null)
+                    continue;
+
+                Component? component =
+                    obj as Component;
+
+                if (component == null)
+                    continue;
+
+                float distance =
+                    Vector3.Distance(
+                        component.transform.position,
+                        npc.transform.position);
+
+                if (distance > 3f)
+                    continue;
+
+                ApplyImpulse(
+                    component,
+                    direction);
             }
         }
         catch (Exception ex)
         {
-            MelonLogger.Warning($"Attack physics failed: {ex.Message}");
+            MelonLogger.Warning(
+                $"Super-strength physics failed: {ex.Message}");
+        }
+    }
+
+    private static void ApplyImpulse(
+        Component rigidbody,
+        Vector3 direction)
+    {
+        try
+        {
+            MethodInfo[] methods =
+                rigidbody
+                    .GetType()
+                    .GetMethods(
+                        BindingFlags.Instance |
+                        BindingFlags.Public);
+
+            foreach (MethodInfo method in methods)
+            {
+                if (method.Name != "AddForce")
+                    continue;
+
+                ParameterInfo[] parameters =
+                    method.GetParameters();
+
+                if (parameters.Length != 2)
+                    continue;
+
+                if (parameters[0].ParameterType !=
+                    typeof(Vector3))
+                    continue;
+
+                Type forceModeType =
+                    parameters[1].ParameterType;
+
+                object? impulse =
+                    Enum.Parse(
+                        forceModeType,
+                        "Impulse");
+
+                Vector3 force =
+                    (direction +
+                     Vector3.up * 0.35f) *
+                    12f;
+
+                method.Invoke(
+                    rigidbody,
+                    new object[]
+                    {
+                        force,
+                        impulse
+                    });
+
+                return;
+            }
+        }
+        catch
+        {
+            // Physics is optional for this first test.
         }
     }
 
     public void ToggleFlight()
     {
-        if (npc == null || !ModConfig.EnableFlight.Value)
+        if (npc == null)
             return;
 
-        flightHeight = flightHeight > 0f ? 0f : 3.5f;
+        if (!ModConfig.EnableFlight.Value)
+            return;
+
+        if (flightHeight > 0f)
+            flightHeight = 0f;
+        else
+            flightHeight = 3.5f;
+
         heatVisionActive = false;
-        voice.Play("taunt", npc.transform.position);
+
+        voice.Play(
+            "taunt",
+            npc.transform.position);
     }
 
     public void ToggleHeatVision()
     {
-        if (npc == null || !ModConfig.EnableHeatVision.Value)
+        if (npc == null)
             return;
 
-        heatVisionActive = !heatVisionActive;
+        if (!ModConfig.EnableHeatVision.Value)
+            return;
+
+        heatVisionActive =
+            !heatVisionActive;
+
         if (heatVisionActive)
         {
             animation.Play("Attack");
-            voice.Play("heatvision", npc.transform.position);
+
+            voice.Play(
+                "heatvision",
+                npc.transform.position);
         }
         else
         {
@@ -165,15 +343,47 @@ internal sealed class HomelanderAI
             return;
 
         IsAlive = false;
+
         heatVisionActive = false;
+
         heatVision.SetVisible(false);
+
         animation.Play("Death");
-        voice.Play("death", npc.transform.position);
+
+        voice.Play(
+            "death",
+            npc.transform.position);
     }
 
     public void Dispose()
     {
         heatVision.Dispose();
+
         npc = null;
+    }
+
+    private static Type? FindUnityType(
+        string typeName)
+    {
+        try
+        {
+            foreach (Assembly assembly
+                     in AppDomain.CurrentDomain
+                         .GetAssemblies())
+            {
+                Type? type =
+                    assembly.GetType(
+                        typeName,
+                        false);
+
+                if (type != null)
+                    return type;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 }
