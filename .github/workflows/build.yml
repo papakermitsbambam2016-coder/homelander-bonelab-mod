@@ -1,0 +1,38 @@
+name: Build HomelanderNPC
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 6
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Restore project
+        run: dotnet restore HomelanderNPC.csproj
+
+      - name: Build project
+        run: dotnet build HomelanderNPC.csproj --configuration Release --no-restore
+
+      - name: Check DLL
+        run: |
+          test -f bin/Release/net6.0/HomelanderNPC.dll
+          echo "HomelanderNPC.dll built successfully!"
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: HomelanderNPC-Quest
+          path: bin/Release/net6.0/HomelanderNPC.dll
